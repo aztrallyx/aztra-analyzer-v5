@@ -1,0 +1,70 @@
+name: Build APK
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descomprimir proyecto
+        run: |
+          ls -la
+          for z in *.zip; do unzip -q "$z"; done
+          ls -la aztra_analyzer
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Crear proyecto Android
+        working-directory: aztra_analyzer
+        run: |
+          cp -r lib /tmp/lib_backup
+          cp pubspec.yaml /tmp/pubspec_backup.yaml
+          flutter create . --platforms=android --project-name aztra_analyzer --org com.aztrallyx
+          rm -rf lib test
+          cp -r /tmp/lib_backup lib
+          cp /tmp/pubspec_backup.yaml pubspec.yaml
+
+      - name: Parchar Android (nombre, permisos, servicio en segundo plano)
+        run: python3 aztra_analyzer/tools/patch_android.py aztra_analyzer
+
+      - name: Forzar compileSdk 36 en plugins
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/compilesdk.gradle <<'EOF2'
+          allprojects {
+            afterEvaluate { p ->
+              if (p.plugins.hasPlugin('com.android.library')) {
+                p.android.compileSdk = 36
+              }
+            }
+          }
+          EOF2
+
+      - name: Firma estable (para poder actualizar sin desinstalar)
+        run: |
+          mkdir -p ~/.android
+          cp aztra_analyzer/tools/debug.keystore ~/.android/debug.keystore
+
+      - name: Compilar
+        working-directory: aztra_analyzer
+        run: |
+          flutter pub get
+          dart run flutter_launcher_icons
+          flutter build apk --release --no-shrink --target-platform android-arm64
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: aztra-${{ github.run_number }}
+          name: Aztra Analyzer ${{ github.run_number }}
+          files: aztra_analyzer/build/app/outputs/flutter-apk/app-release.apk
